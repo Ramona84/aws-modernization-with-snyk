@@ -1,35 +1,34 @@
 version: 0.2
+
+env:
+  parameter-store:
+    SNYK_AUTH_TOKEN: "snykAuthToken"
+
 phases:
-  install:
-    runtime-versions:
-      docker: 18
-      python: 3.7
-      ruby: 2.6
   pre_build:
     commands:
       - echo Logging in to Amazon ECR...
       - aws --version
       - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
-      - REPOSITORY_URI=$(aws ecr describe-repositories --repository-name modernization-workshop --query=repositories[0].repositoryUri --output=text)
+      - REPOSITORY_URI=$(aws ecr describe-repositories --repository-name petstore_frontend --query=repositories[0].repositoryUri --output=text)
       - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
       - IMAGE_TAG=${COMMIT_HASH:=latest}
-      - PWD=$(pwd) 
-      - echo Setting CodeCommit Credentials
-      - git config --global credential.helper '!aws codecommit credential-helper $@'
-      - git config --global credential.UseHttpPath true
-      - git init
-      - git remote add origin https://git-codecommit.us-west-2.amazonaws.com/v1/repos/modernization-workshop
-      - git fetch
-      - git checkout -f "$CODEBUILD_RESOLVED_SOURCE_VERSION"
-      - git submodule init
-      - git submodule update --recursive            
+      - PWD=$(pwd)
+      - PWDUTILS=$(pwd)
+      - curl -Lo ./snyk "https://github.com/snyk/snyk/releases/download/v1.210.0/snyk-linux"
+      - chmod -R +x ./snyk
+
   build:
     commands:
       - echo Build started on `date`
       - echo Building the Docker image...
-      - cd app
-      - docker build -t $REPOSITORY_URI:latest .
+      - cd modules/containerize-application
+      - docker build --build-arg snyk_auth_token=$SNYK_AUTH_TOKEN -t $REPOSITORY_URI:latest .
+      - $PWDUTILS/snyk auth $SNYK_AUTH_TOKEN
+      - $PWDUTILS/snyk test --docker $REPOSITORY_URI:latest
+      - $PWDUTILS/snyk monitor --docker $REPOSITORY_URI:latest
       - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+
   post_build:
     commands:
       - echo Build completed on `date`
@@ -38,6 +37,7 @@ phases:
       - docker push $REPOSITORY_URI:$IMAGE_TAG
       - echo Writing image definitions file...
       - echo Source DIR ${CODEBUILD_SRC_DIR}
-      - printf '[{"name":"modernization-workshop","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > ${CODEBUILD_SRC_DIR}/imagedefinitions.json
+      - printf '[{"name":"petstore","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > ${CODEBUILD_SRC_DIR}/imagedefinitions.json
 artifacts:
-  files: imagedefinitions.json
+  files:
+  - 'imagedefinitions.json'
